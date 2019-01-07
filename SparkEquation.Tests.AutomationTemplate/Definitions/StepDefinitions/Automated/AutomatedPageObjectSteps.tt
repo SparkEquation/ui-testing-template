@@ -1,0 +1,204 @@
+<#@ output		extension=".cs"											#>
+<#@ template    hostspecific= "true"									#>
+<#@ assembly    name        = "System.Core"								#>
+<#@ assembly    name        = "System.Runtime"							#>
+<#@ assembly    name        = "System.Threading.Tasks"					#>
+<#@ assembly    name        = "System.Text.Encoding"					#>
+<#@ assembly    name        = "Microsoft.CodeAnalysis"					#>
+<#@ assembly    name        = "Microsoft.CodeAnalysis.CSharp"			#>
+<#@ import      namespace   = "System.IO"								#>
+<#@ import		namespace   = "System.Collections.Generic"				#>
+<#@ import      namespace   = "System.Linq"								#>
+<#@ import		namespace	= "Microsoft.CodeAnalysis.CSharp.Syntax"	#>
+<# 
+	var rPath = Path.GetFullPath(Host.ResolvePath(@"..\..\PageObjects\"));
+
+	var files = DirSearch(rPath);
+	var namespaces = DirOnlySearch(rPath).Select(x => "SparkEquation.Tests.AutomationTemplate.Definitions." + x.Substring(x.IndexOf("PageObjects")).Replace("\\", ".")).ToList();
+
+	var commonClassFiles = DirSearchCommon(rPath + "\\Common");
+
+	Dictionary<string, ClassDeclarationSyntax> commonTrees = GetParentClassData(commonClassFiles);
+
+	AddCommonHeader(namespaces);
+
+	foreach(var fl in files)
+	{
+
+		var host    = Path.GetFullPath(fl);//Host.ResolvePath(@"..\..\PageObjects\LoginPage.cs"));
+    
+		var content = File.ReadAllText(host);
+
+		var tree = Microsoft.CodeAnalysis.CSharp.CSharpSyntaxTree.ParseText(content);
+
+		var properties = tree
+			.GetRoot()
+			.ChildNodes()
+			.OfType<NamespaceDeclarationSyntax>()
+			.SelectMany(x => x.ChildNodes())
+			.OfType<ClassDeclarationSyntax>()
+			.SelectMany(x => x.ChildNodes())
+			.OfType<PropertyDeclarationSyntax>()
+			.ToList();
+		AddBindingClassData(properties, commonTrees);
+	}
+	AddCommonFooter();
+#>
+<#+
+	
+#>
+<#+
+	public void AddBindingClassData(List<PropertyDeclarationSyntax> properties, Dictionary<string, ClassDeclarationSyntax> commonTrees)
+	{
+		var parent = (ClassDeclarationSyntax)properties.FirstOrDefault().Parent;
+
+		var className = parent.Identifier.ToString();
+
+		var parentBaseType = parent.BaseList.Types.Where(x => x.Type.ToString().EndsWith("Page") && !x.Type.ToString().StartsWith("I")).FirstOrDefault();
+#>
+	[Binding]
+	public class <#=className#>Steps : BindingBase<<#=className#>>
+	{
+
+		public <#=className#>Steps(ScenarioContext scenarioContext, SessionConfiguration config) 
+            : base(scenarioContext, config)
+        {
+            
+        }
+<#+
+		AddProperties(properties, className);
+
+		if (parentBaseType != null && commonTrees.ContainsKey(parentBaseType.ToString()))
+		{
+			var commonProperties = commonTrees[parentBaseType.ToString()].ChildNodes().OfType<PropertyDeclarationSyntax>().ToList();
+
+			AddProperties(commonProperties, className);
+		}
+#>
+}
+<#+
+	}
+
+	public void AddProperties(List<PropertyDeclarationSyntax> propertyDeclarations, string className)
+	{
+		foreach (var property in propertyDeclarations.Where(x => x.Type.ToString() == "IWebElement"))
+		{
+			var name = property.Identifier.ToString();
+			AddWebElementProperty(className, name);
+		}
+	}
+
+	public void AddWebElementProperty(string className, string propertyName)
+	{
+#>
+		[When(@"I click <#=className#>.<#=propertyName#>")]
+		public void WhenIClick<#=className#><#=propertyName#>()
+		{
+			Page.WaitUntil(() => Page.<#=propertyName#>.Displayed);
+			this.Page.<#=propertyName#>.Click();
+		}
+
+		[Then(@"I see <#=className#>.<#=propertyName#>")]
+		public void ThenISee<#=className#><#=propertyName#>()
+		{
+			Page.VerifyThat(() => Assert.IsTrue(Page.<#=propertyName#>.Displayed), Page.<#=propertyName#>);
+		}
+<#+
+	}
+
+	public void AddCommonHeader(List<string> namespaces)
+	{
+#>
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+using SparkEquation.Tests.AutomationTemplate.Infrastructure;
+using SparkEquation.Tests.AutomationTemplate.Definitions.PageObjects;
+using SparkEquation.Tests.AutomationTemplate.Definitions.StepDefinitions.Common;
+using TechTalk.SpecFlow;
+using NUnit.Framework;
+<#+
+		foreach(var definition in namespaces)
+		{
+#>
+using <#=definition#>;
+<#+
+		}
+#>
+
+namespace DummyViewModels
+{
+<#+
+	}
+#>
+<#+
+	public void AddCommonFooter()
+	{
+#>
+}
+<#+
+	}
+
+	public static Dictionary<string, ClassDeclarationSyntax> GetParentClassData(List<string> parentClassPaths)
+	{
+		var commonTrees = new Dictionary<string, ClassDeclarationSyntax>();
+		foreach (var commonFile in parentClassPaths)
+		{
+			var currentContent = File.ReadAllText(commonFile);
+			var currentTree = Microsoft.CodeAnalysis.CSharp.CSharpSyntaxTree.ParseText(currentContent);
+			var classDef = currentTree
+				.GetRoot()
+				.ChildNodes()
+				.OfType<NamespaceDeclarationSyntax>()
+				.SelectMany(x => x.ChildNodes())
+				.OfType<ClassDeclarationSyntax>().FirstOrDefault();
+			if (classDef != null)
+			{
+				var commonKey = classDef.Identifier.ToString();
+				commonTrees[commonKey] = classDef;
+			}
+		}
+		return commonTrees;
+	}
+
+	public static List<String> DirSearch(string sDir)
+	{
+		List<String> files = new List<String>();
+		foreach (string f in Directory.GetFiles(sDir).Where(x => x.EndsWith(".cs")))
+		{
+	        files.Add(f);
+	    }
+	    foreach (string d in Directory.GetDirectories(sDir).Where(x => !x.EndsWith("Common")))
+	    {
+			files.AddRange(DirSearch(d));
+		}
+		return files;
+	}
+
+	public static List<String> DirSearchCommon(string sDir)
+	{
+		List<String> files = new List<String>();
+		foreach (string f in Directory.GetFiles(sDir).Where(x => x.EndsWith(".cs")))
+		{
+	        files.Add(f);
+	    }
+	    foreach (string d in Directory.GetDirectories(sDir).Where(x => x == "Common"))
+	    {
+			files.AddRange(DirSearchCommon(d));
+		}
+		return files;
+	}
+
+	public static List<String> DirOnlySearch(string sDir)
+	{
+		List<String> dirs = new List<String>();
+	    foreach (string d in Directory.GetDirectories(sDir).Where(x => !x.EndsWith("Common")))
+	    {
+			dirs.Add(d);
+			dirs.AddRange(DirOnlySearch(d));
+		}
+		return dirs;
+	}
+#>
